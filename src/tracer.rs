@@ -21,7 +21,7 @@ mod linux {
     pub fn trace_loop(child: Pid, sender: SyncSender<Event>) -> Result<()> {
         // Wait for the initial stop (e.g. SIGTRAP from execve) from the child
         let status = waitpid(child, None).context("failed to wait for initial child stop")?;
-        
+
         if let WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _) = status {
             return Ok(());
         }
