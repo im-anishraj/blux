@@ -210,7 +210,7 @@ fn child_exec(pty: &PtyPair, program: &str, args: &[String]) -> ! {
 
     // Set the slave PTY as the controlling terminal.
     unsafe {
-        libc::ioctl(slave_fd, libc::TIOCSCTTY, 0);
+        libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0);
     }
 
     // Redirect stdio to the slave PTY.
