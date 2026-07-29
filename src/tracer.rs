@@ -41,7 +41,11 @@ mod linux {
         ptrace::syscall(child, None).context("failed to resume child")?;
 
         loop {
-            let status = waitpid(None, None).unwrap_or(WaitStatus::StillAlive);
+            let status_res = waitpid(None, None);
+            if let Err(nix::errno::Errno::ECHILD) = status_res {
+                break; // No more children to trace
+            }
+            let status = status_res.unwrap_or(WaitStatus::StillAlive);
 
             match status {
                 WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _) => {
