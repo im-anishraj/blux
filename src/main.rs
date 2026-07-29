@@ -1,3 +1,4 @@
+#![allow(unused)]
 mod cli;
 mod enforce;
 mod events;
