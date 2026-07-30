@@ -81,78 +81,54 @@ impl PtyPair {
         let master_fd = self.master.as_raw_fd();
         let stdin_fd = io::stdin().as_raw_fd();
 
-        let mut buf = [0u8; 4096];
-
-        loop {
-            // Use poll(2) to wait for data on either stdin or the PTY master.
-            let mut fds = [
-                libc::pollfd {
-                    fd: stdin_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: master_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-
-            let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
-
-            if ret < 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::Interrupted {
-                    // Interrupted by signal — retry.
-                    continue;
-                }
-                return Err(err).context("poll failed");
-            }
-
-            // stdin → PTY master (user input)
-            if fds[0].revents & libc::POLLIN != 0 {
-                let mut stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
-                let n = stdin_file.read(&mut buf);
-                // Prevent the File from closing stdin when dropped.
-                std::mem::forget(stdin_file);
-
-                match n {
-                    Ok(0) => {
-                        // stdin EOF — nothing more to send.
-                    }
+        // Thread 1: stdin -> PTY master
+        // This runs in the background. Blocking reads on stdin cannot be reliably
+        // interrupted, so we let the OS reap this thread when the main process exits.
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match nix::unistd::read(stdin_fd, &mut buf) {
+                    Ok(0) => break, // EOF
                     Ok(n) => {
-                        let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
-                        let _ = master_file.write_all(&buf[..n]);
-                        std::mem::forget(master_file);
+                        let mut written = 0;
+                        while written < n {
+                            match nix::unistd::write(master_fd, &buf[written..n]) {
+                                Ok(0) => break,
+                                Ok(w) => written += w,
+                                Err(nix::errno::Errno::EINTR) => continue,
+                                Err(_) => return, // Child PTY closed or error
+                            }
+                        }
                     }
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => {
-                        // stdin error — stop reading from stdin but keep relaying master output.
-                    }
+                    Err(nix::errno::Errno::EINTR) => continue,
+                    Err(_) => break, // Stdin error
                 }
             }
+        });
 
-            // PTY master → stdout (child output)
-            if fds[1].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
-                let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
-                let n = master_file.read(&mut buf);
-                std::mem::forget(master_file);
-
-                match n {
-                    Ok(0) | Err(_) => {
-                        // Master EOF or error — child has exited.
+        // Thread 2 (Current Thread): PTY master -> stdout
+        let mut buf = [0u8; 4096];
+        loop {
+            match nix::unistd::read(master_fd, &mut buf) {
+                Ok(0) => {
+                    // EOF — child has exited and closed its end of the PTY
+                    break;
+                }
+                Ok(n) => {
+                    let mut stdout = io::stdout();
+                    if stdout.write_all(&buf[..n]).is_err() {
                         break;
                     }
-                    Ok(n) => {
-                        let _ = io::stdout().write_all(&buf[..n]);
-                        let _ = io::stdout().flush();
-                    }
+                    let _ = stdout.flush();
                 }
-            }
-
-            // Master hung up without POLLIN data.
-            if fds[1].revents & libc::POLLHUP != 0 && fds[1].revents & libc::POLLIN == 0 {
-                break;
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(nix::errno::Errno::EIO) => {
+                    // Linux returns EIO when the slave side of a PTY is closed.
+                    break;
+                }
+                Err(_) => {
+                    break; // Other error
+                }
             }
         }
 

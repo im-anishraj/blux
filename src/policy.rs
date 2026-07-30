@@ -64,23 +64,8 @@ impl Policy {
             anyhow::bail!("policy file not found at {}", path.display());
         } else {
             // No explicit path, and default bulx.toml doesn't exist.
-            // Return an "allow-all" policy by default in audit mode, or just an empty policy?
-            // Actually, if we return an empty policy, EVERYTHING will be a violation.
-            // In the plan, we decided "Option B: Use an allow-all mock policy" (or empty policy? Wait, an empty policy means deny-all, which makes everything a violation. We'll return an empty policy but maybe flag it as 'no policy loaded').
-            // Let's just return an empty policy. That means "deny-by-default", so everything is a violation.
-            // The user will see all violations. If we do allow-all, no violations will be reported.
-            // The plan said "Option B: Use an allow-all mock policy just to print a list of events".
-            // Let's implement evaluate to return true if it's an allow-all mock policy.
-            // But wait, it's easier to just have evaluate return true if the policy is entirely empty, OR we just mark a boolean `is_allow_all`.
-            // Let's add a flag for `allow_all`.
-            let mut p = Policy::default();
-            p.fs.allow_read.push("*".to_string());
-            p.fs.allow_write.push("*".to_string());
-            p.net.allow_hosts.push("*".to_string());
-            p.net.allow_ports.push(0); // 0 means all for now? Or just match '*' logic.
-            p.process.allow_spawn.push("*".to_string());
-            p.env.allow_read.push("*".to_string());
-            Ok(p)
+            // Secure by default: Return an empty policy (deny-all).
+            Ok(Policy::default())
         }
     }
 

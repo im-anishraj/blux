@@ -106,11 +106,22 @@ mod linux {
         match sys_no {
             libc::SYS_openat => {
                 // int dirfd = regs.rdi, const char *pathname = regs.rsi, int flags = regs.rdx
-                if let Ok(path) = read_string_from_memory(pid, regs.rsi as *mut libc::c_void) {
+                if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
                     let _ = sender.send(Event::FileOpen {
                         path,
                         mode: "read/write".to_string(),
                     });
+                }
+            }
+            libc::SYS_unlinkat => {
+                if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
+                    let _ = sender.send(Event::FileDelete { path });
+                }
+            }
+            libc::SYS_connect | libc::SYS_bind => {
+                let ptr = regs.rsi as *mut libc::c_void;
+                if let Some((ip, port)) = read_sockaddr_from_memory(pid, ptr) {
+                    let _ = sender.send(Event::NetConnect { addr: ip, port });
                 }
             }
             libc::SYS_execve | libc::SYS_execveat => {
@@ -161,6 +172,55 @@ mod linux {
         }
 
         String::from_utf8(res).context("invalid utf8")
+    }
+
+    fn resolve_at_path(pid: Pid, dirfd: i32, ptr: *mut libc::c_void) -> Result<String> {
+        let raw_path = read_string_from_memory(pid, ptr)?;
+        if raw_path.starts_with('/') {
+            return Ok(raw_path);
+        }
+
+        let base_path = if dirfd == libc::AT_FDCWD {
+            std::fs::read_link(format!("/proc/{}/cwd", pid))
+                .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+        } else {
+            std::fs::read_link(format!("/proc/{}/fd/{}", pid, dirfd))
+                .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+        };
+
+        let full_path = base_path.join(raw_path);
+        Ok(full_path.to_string_lossy().into_owned())
+    }
+
+    fn read_sockaddr_from_memory(pid: Pid, addr: *mut libc::c_void) -> Option<(String, u16)> {
+        let word1 = ptrace::read(pid, addr as *mut libc::c_void).ok()?;
+        let word2 = ptrace::read(pid, (addr as usize + 8) as *mut libc::c_void).ok()?;
+
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&word1.to_ne_bytes());
+        bytes[8..16].copy_from_slice(&word2.to_ne_bytes());
+
+        let family = u16::from_ne_bytes([bytes[0], bytes[1]]);
+
+        if family == libc::AF_INET as u16 {
+            let port = u16::from_be_bytes([bytes[2], bytes[3]]);
+            let ip = std::net::Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]);
+            return Some((ip.to_string(), port));
+        } else if family == libc::AF_INET6 as u16 {
+            let port = u16::from_be_bytes([bytes[2], bytes[3]]);
+            let word3 = ptrace::read(pid, (addr as usize + 16) as *mut libc::c_void).ok()?;
+            let word4 = ptrace::read(pid, (addr as usize + 24) as *mut libc::c_void).ok()?;
+            
+            let mut ipv6_bytes = [0u8; 16];
+            ipv6_bytes[0..4].copy_from_slice(&bytes[8..12]);
+            ipv6_bytes[4..12].copy_from_slice(&word3.to_ne_bytes());
+            ipv6_bytes[12..16].copy_from_slice(&word4.to_ne_bytes()[0..4]);
+            
+            let ip = std::net::Ipv6Addr::from(ipv6_bytes);
+            return Some((ip.to_string(), port));
+        }
+
+        None
     }
 }
 
