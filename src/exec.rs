@@ -55,24 +55,25 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     let enforce = cli.enforce;
     let policy_for_child = policy.clone();
 
-    if audit || enforce {
-        unsafe {
-            cmd.pre_exec(move || {
-                if enforce {
-                    if let Some(ref p) = policy_for_child {
-                        enforce::apply_sandbox(p)
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-                        enforce::apply_seccomp_filter()
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-                    }
-                }
-                if audit {
-                    tracer::setup_child()
+    unsafe {
+        cmd.pre_exec(move || {
+            // Fix Problem 7: Put child in its own process group so kill(-pid) works
+            libc::setpgid(0, 0);
+
+            if enforce {
+                if let Some(ref p) = policy_for_child {
+                    enforce::apply_sandbox(p)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    enforce::apply_seccomp_filter()
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
                 }
-                Ok(())
-            });
-        }
+            }
+            if audit {
+                tracer::setup_child()
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            }
+            Ok(())
+        });
     }
 
     let mut child = match cmd.spawn() {
@@ -160,8 +161,7 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
             let format = cli.format.clone();
             let verbose = cli.verbose;
 
-            // If tracing, spawn tracer and reporter
-            let trace_thread = if audit {
+            if audit {
                 let (tx, rx) = std::sync::mpsc::sync_channel(1000);
                 let policy = policy.unwrap();
 
@@ -169,22 +169,27 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
                     report::print_report(rx, format, policy, verbose);
                 });
 
-                Some(std::thread::spawn(move || {
-                    let _ = tracer::trace_loop(child, tx);
-                    let _ = report_thread.join();
-                }))
-            } else {
-                None
-            };
+                // CRITICAL FIX: The thread that calls fork() MUST be the one handling ptrace.
+                // We offload the PTY I/O relay loop to a secondary thread so the main thread
+                // can safely trace the child process.
+                let relay_thread = std::thread::spawn(move || {
+                    pty.relay_io()
+                });
 
-            // Relay I/O until child exits.
-            // Ignore relay errors — the child may have already exited.
-            let _ = pty.relay_io();
+                // Main thread acts as the tracer
+                let trace_res = tracer::trace_loop(child, tx);
+                
+                let _ = report_thread.join();
+                let relay_res = relay_thread.join().unwrap(); // safe, thread doesn't panic
 
-            if let Some(t) = trace_thread {
-                let _ = t.join();
+                trace_res?;
+                relay_res?;
+
                 Ok(ExitCode::from(0))
             } else {
+                // Relay I/O until child exits.
+                let _ = pty.relay_io();
+
                 // Wait for child to finish.
                 let status = wait::waitpid(child, None)
                     .with_context(|| format!("failed to wait for '{program}'"))?;
