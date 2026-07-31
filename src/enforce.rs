@@ -47,8 +47,8 @@ mod linux {
 
         let mut ruleset = Ruleset::default().handle_access(fs_handled)?;
 
-        // Only handle network access if we actually want to restrict it
-        if !policy.net.allow_ports.is_empty() && !policy.net.allow_ports.contains(&0) {
+        // We MUST handle network access to enforce fail-closed security, unless the user explicitly requested allow-all (port 0)
+        if !policy.net.allow_ports.contains(&0) {
             ruleset = ruleset.handle_access(net_handled)?;
         }
 

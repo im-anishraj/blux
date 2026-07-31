@@ -85,8 +85,7 @@ impl Policy {
             }
             Event::NetConnect { addr, port } => {
                 let host_allowed = Self::match_prefix_list(addr, &self.net.allow_hosts);
-                let port_allowed = self.net.allow_ports.is_empty()
-                    || self.net.allow_ports.contains(&0) // 0 means all
+                let port_allowed = self.net.allow_ports.contains(&0) // 0 means all
                     || self.net.allow_ports.contains(port);
                 host_allowed && port_allowed
             }
