@@ -125,13 +125,13 @@ mod linux {
                 }
             }
             libc::SYS_execve | libc::SYS_execveat => {
-                // execve: rdi = filename. execveat: rsi = filename.
-                let ptr = if sys_no == libc::SYS_execve {
-                    regs.rdi
+                // execve: rdi = filename. execveat: rsi = filename, rdi = dirfd
+                let (dirfd, ptr) = if sys_no == libc::SYS_execve {
+                    (libc::AT_FDCWD, regs.rdi)
                 } else {
-                    regs.rsi
+                    (regs.rdi as i32, regs.rsi)
                 };
-                if let Ok(path) = read_string_from_memory(pid, ptr as *mut libc::c_void) {
+                if let Ok(path) = resolve_at_path(pid, dirfd, ptr as *mut libc::c_void) {
                     let _ = sender.send(Event::ProcessExec { binary: path });
                 }
             }
@@ -209,12 +209,10 @@ mod linux {
         } else if family == libc::AF_INET6 as u16 {
             let port = u16::from_be_bytes([bytes[2], bytes[3]]);
             let word3 = ptrace::read(pid, (addr as usize + 16) as *mut libc::c_void).ok()?;
-            let word4 = ptrace::read(pid, (addr as usize + 24) as *mut libc::c_void).ok()?;
             
             let mut ipv6_bytes = [0u8; 16];
-            ipv6_bytes[0..4].copy_from_slice(&bytes[8..12]);
-            ipv6_bytes[4..12].copy_from_slice(&word3.to_ne_bytes());
-            ipv6_bytes[12..16].copy_from_slice(&word4.to_ne_bytes()[0..4]);
+            ipv6_bytes[0..8].copy_from_slice(&word2.to_ne_bytes());
+            ipv6_bytes[8..16].copy_from_slice(&word3.to_ne_bytes());
             
             let ip = std::net::Ipv6Addr::from(ipv6_bytes);
             return Some((ip.to_string(), port));
