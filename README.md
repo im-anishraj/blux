@@ -65,6 +65,12 @@ cargo install bulx
 
 🚧 **Early development** — Phase 5 (Landlock enforcement, Seccomp-BPF filtering, and execution tracing).
 
+### Known Limitations (v0.0.1)
+- **Linux Only**: Bulx requires a modern Linux kernel with `landlock`, `seccomp`, and `ptrace` support.
+- **Single-Threaded Tracer Bottleneck**: Heavy concurrent or multi-threaded workloads will currently serialize at the `waitpid` ptrace loop, reducing concurrency and execution speed.
+- **JSON Mode Memory Growth**: When using `--format json`, the audit pipeline buffers events in unbounded memory. Extremely long-running sessions or syscall floods may trigger OOM.
+- **Audit TOCTOU Limitations**: Ptrace path extraction relies on reading tracee memory, making audit logging susceptible to Time-Of-Check to Time-Of-Use (TOCTOU) races. *Note: Kernel enforcement via Landlock/Seccomp remains strictly secure against these races.*
+
 ## License
 
 Licensed under either of Apache License, Version 2.0 or MIT License.
