@@ -7,7 +7,7 @@ mod linux {
     use anyhow::Context;
     use enumflags2::BitFlags;
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr,
+        ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreated,
         RulesetStatus,
     };
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
@@ -15,7 +15,7 @@ mod linux {
     use std::path::Path;
 
     pub struct SandboxConfig {
-        pub ruleset: Option<RulesetCreatedAttr>,
+        pub ruleset: Option<RulesetCreated>,
         pub seccomp_filter: Option<BpfProgram>,
     }
 
@@ -29,7 +29,7 @@ mod linux {
         })
     }
 
-    fn prepare_landlock(policy: &Policy) -> Result<RulesetCreatedAttr> {
+    fn prepare_landlock(policy: &Policy) -> Result<RulesetCreated> {
         let abi = ABI::V4; // V4 supports network
 
         // 1. Map Filesystem Policy
@@ -238,7 +238,7 @@ mod linux {
             libc::SYS_rt_sigpending,
             libc::SYS_rt_sigtimedwait,
             libc::SYS_rt_sigqueueinfo,
-            libc::SYS_sigsuspend,
+            libc::SYS_rt_sigsuspend,
             libc::SYS_sigaltstack,
             libc::SYS_utime,
             libc::SYS_prctl,
