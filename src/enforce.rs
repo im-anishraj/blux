@@ -60,9 +60,9 @@ mod linux {
         } else {
             for path in &policy.fs.allow_read {
                 let p = Path::new(path);
-                if p.exists() {
+                if let Ok(canon) = std::fs::canonicalize(p) {
                     ruleset =
-                        ruleset.add_rules(landlock::path_beneath_rules([p], fs_read_rights))?;
+                        ruleset.add_rules(landlock::path_beneath_rules([canon.as_path()], fs_read_rights))?;
                 }
             }
         }
@@ -76,9 +76,9 @@ mod linux {
         } else {
             for path in &policy.fs.allow_write {
                 let p = Path::new(path);
-                if p.exists() {
+                if let Ok(canon) = std::fs::canonicalize(p) {
                     ruleset =
-                        ruleset.add_rules(landlock::path_beneath_rules([p], fs_write_rights))?;
+                        ruleset.add_rules(landlock::path_beneath_rules([canon.as_path()], fs_write_rights))?;
                 }
             }
         }
@@ -95,9 +95,9 @@ mod linux {
         } else {
             for path in &exec_paths {
                 let p = Path::new(path);
-                if p.exists() {
+                if let Ok(canon) = std::fs::canonicalize(p) {
                     ruleset =
-                        ruleset.add_rules(landlock::path_beneath_rules([p], fs_execute_rights))?;
+                        ruleset.add_rules(landlock::path_beneath_rules([canon.as_path()], fs_execute_rights))?;
                 }
             }
         }
