@@ -149,29 +149,21 @@ mod linux {
     }
 
     fn read_string_from_memory(pid: Pid, addr: *mut libc::c_void) -> Result<String> {
-        let mut res = Vec::new();
-        let mut current_addr = addr as usize;
+        use nix::sys::uio::{process_vm_readv, RemoteIoVec};
+        use std::io::IoSliceMut;
 
-        loop {
-            // ptrace::read reads a word (8 bytes on 64-bit)
-            let word = ptrace::read(pid, current_addr as *mut libc::c_void)?;
-            let bytes = word.to_ne_bytes();
-
-            for &b in &bytes {
-                if b == 0 {
-                    return String::from_utf8(res).context("invalid utf8");
-                }
-                res.push(b);
-            }
-
-            current_addr += std::mem::size_of::<libc::c_long>();
-            if res.len() > 4096 {
-                // Max path length safeguard
-                break;
-            }
-        }
-
-        String::from_utf8(res).context("invalid utf8")
+        let mut buf = vec![0u8; 4096];
+        let remote_iov = RemoteIoVec {
+            base: addr as usize,
+            len: 4096,
+        };
+        
+        let mut local_iov = [IoSliceMut::new(&mut buf)];
+        let read_bytes = process_vm_readv(pid, &mut local_iov, &[remote_iov])
+            .context("process_vm_readv failed")?;
+        
+        let end = buf[..read_bytes].iter().position(|&b| b == 0).unwrap_or(read_bytes);
+        String::from_utf8(buf[..end].to_vec()).context("invalid utf8")
     }
 
     fn resolve_at_path(pid: Pid, dirfd: i32, ptr: *mut libc::c_void) -> Result<String> {
