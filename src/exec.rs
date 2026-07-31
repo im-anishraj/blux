@@ -55,22 +55,26 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     let enforce = cli.enforce;
     let policy_for_child = policy.clone();
 
+    let sandbox_config = if enforce {
+        if let Some(ref p) = policy_for_child {
+            Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     unsafe {
         cmd.pre_exec(move || {
             // Fix Problem 7: Put child in its own process group so kill(-pid) works
             libc::setpgid(0, 0);
 
-            if enforce {
-                if let Some(ref p) = policy_for_child {
-                    enforce::apply_sandbox(p)
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-                    enforce::apply_seccomp_filter()
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-                }
+            if let Some(ref config) = sandbox_config {
+                enforce::apply_sandbox_in_child(config)?;
             }
             if audit {
-                tracer::setup_child()
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                tracer::setup_child()?;
             }
             Ok(())
         });
@@ -79,7 +83,9 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            if e.kind() == io::ErrorKind::NotFound {
+            if e.raw_os_error() == Some(libc::ENOSYS) {
+                return Err(anyhow::anyhow!("Landlock is not supported by your kernel. Sandbox enforcement failed."));
+            } else if e.kind() == io::ErrorKind::NotFound {
                 eprintln!("bulx: command not found: {}", program);
                 return Ok(ExitCode::from(127));
             } else {
@@ -124,6 +130,16 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
 
     signal::install_forwarding_handlers()?;
 
+    let sandbox_config = if cli.enforce {
+        if let Some(ref p) = policy {
+            Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Fork the process.
     // SAFETY: We are single-threaded at this point (before any thread spawning),
     // and the child immediately calls exec. This satisfies the POSIX requirements
@@ -133,14 +149,21 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     match fork_result {
         ForkResult::Child => {
             // Child process: set up the slave PTY as stdin/stdout/stderr, then exec.
-            if cli.enforce {
-                if let Some(ref p) = policy {
-                    let _ = enforce::apply_sandbox(p);
-                    let _ = enforce::apply_seccomp_filter();
+            if let Some(ref config) = sandbox_config {
+                if let Err(e) = enforce::apply_sandbox_in_child(config) {
+                    if e.raw_os_error() == Some(libc::ENOSYS) {
+                        eprintln!("bulx: Landlock is not supported by your kernel. Sandbox enforcement failed.");
+                    } else {
+                        eprintln!("bulx: failed to apply sandbox: {}", e);
+                    }
+                    std::process::exit(127);
                 }
             }
             if cli.audit {
-                let _ = tracer::setup_child();
+                if let Err(e) = tracer::setup_child() {
+                    eprintln!("bulx: failed to setup tracer: {}", e);
+                    std::process::exit(127);
+                }
             }
             child_exec(&pty, program, args);
         }

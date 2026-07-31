@@ -10,9 +10,26 @@ mod linux {
         ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr,
         RulesetStatus,
     };
+    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
+    use std::convert::TryInto;
     use std::path::Path;
 
-    pub fn apply_sandbox(policy: &Policy) -> Result<()> {
+    pub struct SandboxConfig {
+        pub ruleset: Option<RulesetCreatedAttr>,
+        pub seccomp_filter: Option<BpfProgram>,
+    }
+
+    pub fn prepare_sandbox(policy: &Policy) -> Result<SandboxConfig> {
+        let ruleset = prepare_landlock(policy)?;
+        let seccomp_filter = prepare_seccomp()?;
+        
+        Ok(SandboxConfig {
+            ruleset: Some(ruleset),
+            seccomp_filter: Some(seccomp_filter),
+        })
+    }
+
+    fn prepare_landlock(policy: &Policy) -> Result<RulesetCreatedAttr> {
         let abi = ABI::V4; // V4 supports network
 
         // 1. Map Filesystem Policy
@@ -31,7 +48,6 @@ mod linux {
         fs_write_rights |= AccessFs::MakeFifo;
         fs_write_rights |= AccessFs::MakeBlock;
         fs_write_rights |= AccessFs::MakeSym;
-        // Truncate and Refer might be available depending on ABI, but let's stick to these for safety.
 
         let mut fs_execute_rights: BitFlags<AccessFs> = BitFlags::EMPTY;
         fs_execute_rights |= AccessFs::Execute;
@@ -110,28 +126,10 @@ mod linux {
             }
         }
 
-        // Apply the ruleset to the current thread
-        let status = ruleset
-            .restrict_self()
-            .context("failed to restrict self with Landlock")?;
-
-        match status.ruleset {
-            RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced => Ok(()),
-            RulesetStatus::NotEnforced => {
-                anyhow::bail!(
-                    "Landlock is not supported by your kernel. Sandbox enforcement failed."
-                );
-            }
-        }
+        Ok(ruleset)
     }
 
-    pub fn apply_seccomp_filter() -> Result<()> {
-        use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
-        use std::convert::TryInto;
-
-        // An explicit allow-list of standard POSIX syscalls required for typical execution.
-        // This is much safer than a block-list (deny-by-default architecture).
-        // Dangerous syscalls like ptrace, bpf, unshare, mount, and process_vm_writev are omitted.
+    fn prepare_seccomp() -> Result<BpfProgram> {
         let allow_list = vec![
             libc::SYS_read, libc::SYS_write, libc::SYS_open, libc::SYS_close,
             libc::SYS_stat, libc::SYS_fstat, libc::SYS_lstat, libc::SYS_poll,
@@ -191,7 +189,26 @@ mod linux {
         .try_into()
         .context("failed to compile seccomp filter to BPF")?;
 
-        seccompiler::apply_filter(&filter).context("failed to apply seccomp filter")?;
+        Ok(filter)
+    }
+
+    pub fn apply_sandbox_in_child(config: &SandboxConfig) -> std::io::Result<()> {
+        if let Some(ruleset) = &config.ruleset {
+            let status = ruleset
+                .restrict_self()
+                .map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM))?;
+            match status.ruleset {
+                RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced => {}
+                RulesetStatus::NotEnforced => {
+                    return Err(std::io::Error::from_raw_os_error(libc::ENOSYS));
+                }
+            }
+        }
+
+        if let Some(filter) = &config.seccomp_filter {
+            seccompiler::apply_filter(filter)
+                .map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM))?;
+        }
 
         Ok(())
     }
@@ -201,13 +218,16 @@ mod linux {
 mod linux {
     use super::*;
 
-    pub fn apply_sandbox(_policy: &Policy) -> Result<()> {
+    pub struct SandboxConfig {}
+
+    pub fn prepare_sandbox(_policy: &Policy) -> Result<SandboxConfig> {
         anyhow::bail!("Enforce mode is only supported on Linux")
     }
 
-    pub fn apply_seccomp_filter() -> Result<()> {
-        anyhow::bail!("Seccomp is only supported on Linux")
+    pub fn apply_sandbox_in_child(_config: &SandboxConfig) -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
     }
 }
 
-pub use linux::{apply_sandbox, apply_seccomp_filter};
+pub use linux::{SandboxConfig, prepare_sandbox, apply_sandbox_in_child};
+
