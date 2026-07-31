@@ -107,7 +107,8 @@ impl PtyPair {
                             Ok(bytes) => {
                                 let mut written = 0;
                                 while written < bytes {
-                                    match nix::unistd::write(&master_borrowed, &buf[written..bytes]) {
+                                    match nix::unistd::write(&master_borrowed, &buf[written..bytes])
+                                    {
                                         Ok(0) => break,
                                         Ok(w) => written += w,
                                         Err(nix::errno::Errno::EINTR) => continue,
