@@ -3,6 +3,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use anyhow::{Context, Result};
 use nix::libc;
+use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::pty::{self, OpenptyResult};
 use nix::sys::termios::{self, SetArg, Termios};
 use nix::unistd;
@@ -22,6 +23,12 @@ impl PtyPair {
     pub fn open() -> Result<Self> {
         let OpenptyResult { master, slave } =
             pty::openpty(None, None).context("failed to allocate PTY")?;
+
+        // Securely set O_CLOEXEC to prevent FD leaks across fork/exec boundaries
+        fcntl(master.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+            .context("failed to set O_CLOEXEC on PTY master")?;
+        fcntl(slave.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+            .context("failed to set O_CLOEXEC on PTY slave")?;
 
         let original_termios = if unistd::isatty(io::stdin().as_raw_fd()).unwrap_or(false) {
             Some(termios::tcgetattr(io::stdin()).context("failed to get terminal attributes")?)

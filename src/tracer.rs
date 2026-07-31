@@ -33,7 +33,8 @@ mod linux {
             ptrace::Options::PTRACE_O_TRACESYSGOOD
                 | ptrace::Options::PTRACE_O_TRACEFORK
                 | ptrace::Options::PTRACE_O_TRACEVFORK
-                | ptrace::Options::PTRACE_O_TRACECLONE,
+                | ptrace::Options::PTRACE_O_TRACECLONE
+                | ptrace::Options::PTRACE_O_EXITKILL,
         )
         .context("failed to set ptrace options")?;
 
@@ -52,9 +53,6 @@ mod linux {
             match status {
                 WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _) => {
                     in_syscall.remove(&pid);
-                    if pid == child {
-                        break;
-                    }
                 }
                 WaitStatus::PtraceSyscall(pid) => {
                     let is_entry = !in_syscall.get(&pid).copied().unwrap_or(false);
