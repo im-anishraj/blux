@@ -17,7 +17,7 @@ pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, v
     let mut total_events = 0;
 
     if format == Format::Human {
-        println!("\n=== Bulx Audit Report ===");
+        eprintln!("\n=== Bulx Audit Report ===");
     }
 
     let mut json_events = Vec::new();
@@ -45,28 +45,28 @@ pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, v
 
                 match &event {
                     Event::FileOpen { path, mode } => {
-                        println!("  {} [FILE OPEN]  {} ({})", status_label, path, mode);
+                        eprintln!("  {} [FILE OPEN]  {} ({})", status_label, path, mode);
                     }
                     Event::FileWrite { path } => {
-                        println!("  {} [FILE WRITE] {}", status_label, path);
+                        eprintln!("  {} [FILE WRITE] {}", status_label, path);
                     }
                     Event::FileDelete { path } => {
-                        println!("  {} [FILE DEL]   {}", status_label, path);
+                        eprintln!("  {} [FILE DEL]   {}", status_label, path);
                     }
                     Event::NetConnect { addr, port } => {
-                        println!("  {} [NET CONN]   {}:{}", status_label, addr, port);
+                        eprintln!("  {} [NET CONN]   {}:{}", status_label, addr, port);
                     }
                     Event::DnsLookup { domain } => {
-                        println!("  {} [DNS]        {}", status_label, domain);
+                        eprintln!("  {} [DNS]        {}", status_label, domain);
                     }
                     Event::ProcessSpawn { binary, args } => {
-                        println!("  {} [PROC SPAWN] {} {:?}", status_label, binary, args);
+                        eprintln!("  {} [PROC SPAWN] {} {:?}", status_label, binary, args);
                     }
                     Event::ProcessExec { binary } => {
-                        println!("  {} [PROC EXEC]  {}", status_label, binary);
+                        eprintln!("  {} [PROC EXEC]  {}", status_label, binary);
                     }
                     Event::EnvRead { key } => {
-                        println!("  {} [ENV READ]   {}", status_label, key);
+                        eprintln!("  {} [ENV READ]   {}", status_label, key);
                     }
                 }
             }
@@ -97,22 +97,22 @@ pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, v
         };
 
         if let Ok(json) = serde_json::to_string_pretty(&report) {
-            println!("{}", json);
+            eprintln!("{}", json);
         }
     } else if format == Format::Human {
         if total_events == 0 {
-            println!("No significant events recorded.");
-            println!("=========================");
+            eprintln!("No significant events recorded.");
+            eprintln!("=========================");
             return;
         }
 
         if violations > 0 {
-            println!("-------------------------");
-            println!("!! Found {} policy violations !!", violations);
+            eprintln!("-------------------------");
+            eprintln!("!! Found {} policy violations !!", violations);
         } else {
-            println!("-------------------------");
-            println!("No policy violations detected.");
+            eprintln!("-------------------------");
+            eprintln!("No policy violations detected.");
         }
-        println!("=========================");
+        eprintln!("=========================");
     }
 }
