@@ -3,76 +3,47 @@ use crate::events::Event;
 use crate::policy::Policy;
 use std::sync::mpsc::Receiver;
 
-pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, verbose: u8) {
-    let mut events = Vec::new();
-    let mut violations = 0;
+#[derive(serde::Serialize)]
+struct JsonEvent<'a> {
+    is_violation: bool,
+    #[serde(flatten)]
+    event: &'a Event,
+}
 
-    // Consume all events until the channel is closed (parent tracer drops sender)
-    while let Ok(event) = receiver.recv() {
-        events.push(event);
+/// Consumes and prints events from the tracer.
+/// Streams events immediately to avoid unbounded memory growth.
+pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, verbose: u8) {
+    let mut violations = 0;
+    let mut total_events = 0;
+
+    if format == Format::Human {
+        println!("\n=== Bulx Audit Report ===");
     }
 
-    match format {
-        Format::Json => {
-            // For JSON, we might want to attach "is_violation: bool" to each event,
-            // but for simplicity we'll just output the raw events for now or wrap them.
-            #[derive(serde::Serialize)]
-            struct JsonReport<'a> {
-                policy_loaded: bool,
-                violations: usize,
-                events: Vec<JsonEvent<'a>>,
-            }
-            #[derive(serde::Serialize)]
-            struct JsonEvent<'a> {
-                is_violation: bool,
-                #[serde(flatten)]
-                event: &'a Event,
-            }
+    let mut json_events = Vec::new();
 
-            let mut json_events = Vec::new();
-            for event in &events {
-                let allowed = policy.evaluate(event);
-                if !allowed {
-                    violations += 1;
-                }
-                json_events.push(JsonEvent {
-                    is_violation: !allowed,
-                    event,
-                });
-            }
-
-            let report = JsonReport {
-                policy_loaded: true,
-                violations,
-                events: json_events,
-            };
-
-            if let Ok(json) = serde_json::to_string_pretty(&report) {
-                println!("{}", json);
-            }
+    // Process each event immediately as it arrives
+    while let Ok(event) = receiver.recv() {
+        total_events += 1;
+        let allowed = policy.evaluate(&event);
+        if !allowed {
+            violations += 1;
         }
-        Format::Human => {
-            println!("\n=== Bulx Audit Report ===");
-            if events.is_empty() {
-                println!("No significant events recorded.");
-                return;
+
+        match format {
+            Format::Json => {
+                // To preserve exact JSON schema compatibility (including key order and formatting),
+                // we must buffer events in memory. This trades bounded memory for backward compatibility.
+                json_events.push((event, allowed));
             }
-
-            for event in &events {
-                let allowed = policy.evaluate(event);
-
+            Format::Human => {
                 if allowed && verbose == 0 {
-                    // Hide allowed events unless verbose mode is enabled
                     continue;
-                }
-
-                if !allowed {
-                    violations += 1;
                 }
 
                 let status_label = if allowed { "[OK]      " } else { "[VIOLATION]" };
 
-                match event {
+                match &event {
                     Event::FileOpen { path, mode } => {
                         println!("  {} [FILE OPEN]  {} ({})", status_label, path, mode);
                     }
@@ -99,16 +70,49 @@ pub fn print_report(receiver: Receiver<Event>, format: Format, policy: Policy, v
                     }
                 }
             }
-
-            if violations > 0 {
-                println!("-------------------------");
-                println!("!! Found {} policy violations !!", violations);
-            } else {
-                println!("-------------------------");
-                println!("No policy violations detected.");
-            }
-
-            println!("=========================");
         }
+    }
+
+    // Final summary
+    if format == Format::Json {
+        #[derive(serde::Serialize)]
+        struct JsonReport<'a> {
+            policy_loaded: bool,
+            violations: usize,
+            events: Vec<JsonEvent<'a>>,
+        }
+
+        let serialized_events: Vec<JsonEvent> = json_events
+            .iter()
+            .map(|(e, allowed)| JsonEvent {
+                is_violation: !allowed,
+                event: e,
+            })
+            .collect();
+
+        let report = JsonReport {
+            policy_loaded: true,
+            violations,
+            events: serialized_events,
+        };
+
+        if let Ok(json) = serde_json::to_string_pretty(&report) {
+            println!("{}", json);
+        }
+    } else if format == Format::Human {
+        if total_events == 0 {
+            println!("No significant events recorded.");
+            println!("=========================");
+            return;
+        }
+
+        if violations > 0 {
+            println!("-------------------------");
+            println!("!! Found {} policy violations !!", violations);
+        } else {
+            println!("-------------------------");
+            println!("No policy violations detected.");
+        }
+        println!("=========================");
     }
 }

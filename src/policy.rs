@@ -4,14 +4,24 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
+/// The `Policy` module handles the parsing and evaluation of security policies.
+/// 
+/// It determines whether system calls intercepted during execution are allowed
+/// based on the provided configuration.
+
 #[derive(Debug, Deserialize, Default, Clone)]
+/// Represents the root configuration of a Blux sandbox policy.
 pub struct Policy {
+    /// File system access rules
     #[serde(default)]
     pub fs: FsPolicy,
+    /// Network connection rules
     #[serde(default)]
     pub net: NetPolicy,
+    /// Process spawning and execution rules
     #[serde(default)]
     pub process: ProcessPolicy,
+    /// Environment variable access rules
     #[serde(default)]
     pub env: EnvPolicy,
 }
