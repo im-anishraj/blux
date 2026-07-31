@@ -13,8 +13,8 @@ mod linux {
     use nix::unistd::Pid;
     use std::collections::HashMap;
 
-    pub fn setup_child() -> Result<()> {
-        ptrace::traceme().context("failed to set PTRACE_TRACEME")?;
+    pub fn setup_child() -> std::io::Result<()> {
+        ptrace::traceme().map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM))?;
         Ok(())
     }
 
@@ -222,8 +222,8 @@ mod linux {
     use super::*;
     use nix::unistd::Pid;
 
-    pub fn setup_child() -> Result<()> {
-        anyhow::bail!("Audit mode is only supported on Linux")
+    pub fn setup_child() -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
     }
 
     pub fn trace_loop(_child: Pid, _sender: SyncSender<Event>) -> Result<()> {
