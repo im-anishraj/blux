@@ -100,6 +100,7 @@ impl Policy {
     }
 
     fn match_prefix_list(target: &str, list: &[String]) -> bool {
+        let target_path = Path::new(target);
         if list.is_empty() {
             return false;
         }
@@ -107,7 +108,8 @@ impl Policy {
             if allowed == "*" {
                 return true;
             }
-            if target.starts_with(allowed) {
+            let allowed_path = Path::new(allowed);
+            if target_path.starts_with(allowed_path) {
                 return true;
             }
         }
@@ -132,6 +134,8 @@ mod tests {
         // No match
         assert!(!Policy::match_prefix_list("/var/log", &list));
         assert!(!Policy::match_prefix_list("/usr/bin", &list));
+        // Ensure semantic matching, not string prefix matching
+        assert!(!Policy::match_prefix_list("/etc_hacked/shadow", &list));
     }
 
     #[test]
