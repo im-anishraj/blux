@@ -37,10 +37,15 @@ pub fn run(cli: &Cli) -> Result<ExitCode> {
     }
 }
 
-fn get_sandbox_config(cli: &Cli, policy: Option<&Policy>) -> Result<Option<enforce::SandboxConfig>> {
+fn get_sandbox_config(
+    cli: &Cli,
+    policy: Option<&Policy>,
+) -> Result<Option<enforce::SandboxConfig>> {
     if cli.enforce {
         if let Some(p) = policy {
-            return Ok(Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?));
+            return Ok(Some(
+                enforce::prepare_sandbox(p).context("failed to prepare sandbox")?,
+            ));
         }
     }
     Ok(None)
@@ -100,7 +105,9 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
         Ok(child) => child,
         Err(e) => {
             if e.raw_os_error() == Some(libc::ENOSYS) {
-                return Err(anyhow::anyhow!("Landlock is not supported by your kernel. Sandbox enforcement failed."));
+                return Err(anyhow::anyhow!(
+                    "Landlock is not supported by your kernel. Sandbox enforcement failed."
+                ));
             } else if e.kind() == io::ErrorKind::NotFound {
                 eprintln!("bulx: command not found: {}", program);
                 return Ok(ExitCode::from(127));
@@ -149,7 +156,9 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
             if let Some(ref config) = sandbox_config {
                 if let Err(e) = enforce::apply_sandbox_in_child(config) {
                     if e.raw_os_error() == Some(libc::ENOSYS) {
-                        eprintln!("bulx: Landlock is not supported by your kernel. Sandbox enforcement failed.");
+                        eprintln!(
+                            "bulx: Landlock is not supported by your kernel. Sandbox enforcement failed."
+                        );
                     } else {
                         eprintln!("bulx: failed to apply sandbox: {}", e);
                     }
@@ -185,15 +194,13 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
                 // CRITICAL FIX: The thread that calls fork() MUST be the one handling ptrace.
                 // We offload the PTY I/O relay loop to a secondary thread so the main thread
                 // can safely trace the child process.
-                let relay_thread = std::thread::spawn(move || {
-                    pty.relay_io()
-                });
+                let relay_thread = std::thread::spawn(move || pty.relay_io());
 
                 // Main thread acts as the tracer
                 let trace_res = run_audit_loop(child, cli, &policy_for_audit);
-                
+
                 let relay_res = relay_thread.join().unwrap(); // safe, thread doesn't panic
-                
+
                 if let Ok(stdin_thread) = relay_res {
                     let _ = stdin_thread.join();
                 }

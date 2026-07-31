@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 /// The `Policy` module handles the parsing and evaluation of security policies.
-/// 
+///
 /// It determines whether system calls intercepted during execution are allowed
 /// based on the provided configuration.
 

@@ -2,8 +2,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use anyhow::{Context, Result};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::libc;
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::pty::{self, OpenptyResult};
 use nix::sys::termios::{self, SetArg, Termios};
 use nix::unistd;
@@ -93,7 +93,7 @@ impl PtyPair {
 
         // Thread 1: stdin -> PTY master
         let stdin_thread = std::thread::spawn(move || {
-            use nix::poll::{poll, PollFd, PollFlags};
+            use nix::poll::{PollFd, PollFlags, poll};
             let mut buf = [0u8; 4096];
             let mut fds = [PollFd::new(stdin_fd, PollFlags::POLLIN)];
 
