@@ -61,8 +61,11 @@ mod linux {
                     in_syscall.insert(pid, is_entry);
 
                     if is_entry {
-                        if let Ok(regs) = ptrace::getregs(pid) {
-                            handle_syscall_entry(pid, &regs, &sender);
+                        match ptrace::getregs(pid) {
+                            Ok(regs) => {
+                                handle_syscall_entry(pid, &regs, &sender);
+                            }
+                            Err(_) => break,
                         }
                     }
 

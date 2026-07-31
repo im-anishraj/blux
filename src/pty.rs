@@ -77,31 +77,42 @@ impl PtyPair {
 
     /// Run the I/O relay loop: shuttle bytes between the real terminal and the
     /// PTY master until the child exits (master returns EOF or error).
-    pub fn relay_io(&self) -> Result<()> {
+    pub fn relay_io(&self) -> Result<std::thread::JoinHandle<()>> {
         let master_fd = self.master.as_raw_fd();
         let stdin_fd = io::stdin().as_raw_fd();
 
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let running_clone = running.clone();
+
         // Thread 1: stdin -> PTY master
-        // This runs in the background. Blocking reads on stdin cannot be reliably
-        // interrupted, so we let the OS reap this thread when the main process exits.
-        std::thread::spawn(move || {
+        let stdin_thread = std::thread::spawn(move || {
+            use nix::poll::{poll, PollFd, PollFlags};
             let mut buf = [0u8; 4096];
-            loop {
-                match nix::unistd::read(stdin_fd, &mut buf) {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        let mut written = 0;
-                        while written < n {
-                            match nix::unistd::write(master_fd, &buf[written..n]) {
-                                Ok(0) => break,
-                                Ok(w) => written += w,
-                                Err(nix::errno::Errno::EINTR) => continue,
-                                Err(_) => return, // Child PTY closed or error
+            let mut fds = [PollFd::new(stdin_fd, PollFlags::POLLIN)];
+
+            while running_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                match poll(&mut fds, 100) {
+                    Ok(n) if n > 0 => {
+                        match nix::unistd::read(stdin_fd, &mut buf) {
+                            Ok(0) => break, // EOF
+                            Ok(bytes) => {
+                                let mut written = 0;
+                                while written < bytes {
+                                    match nix::unistd::write(master_fd, &buf[written..bytes]) {
+                                        Ok(0) => break,
+                                        Ok(w) => written += w,
+                                        Err(nix::errno::Errno::EINTR) => continue,
+                                        Err(_) => return, // Child PTY closed or error
+                                    }
+                                }
                             }
+                            Err(nix::errno::Errno::EINTR) => continue,
+                            Err(_) => break, // Stdin error
                         }
                     }
+                    Ok(_) => continue, // Timeout
                     Err(nix::errno::Errno::EINTR) => continue,
-                    Err(_) => break, // Stdin error
+                    Err(_) => break,
                 }
             }
         });
@@ -132,7 +143,8 @@ impl PtyPair {
             }
         }
 
-        Ok(())
+        running.store(false, std::sync::atomic::Ordering::Relaxed);
+        Ok(stdin_thread)
     }
 }
 

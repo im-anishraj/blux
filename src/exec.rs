@@ -181,14 +181,19 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
                 
                 let _ = report_thread.join();
                 let relay_res = relay_thread.join().unwrap(); // safe, thread doesn't panic
+                
+                if let Ok(stdin_thread) = relay_res {
+                    let _ = stdin_thread.join();
+                }
 
                 trace_res?;
-                relay_res?;
 
                 Ok(ExitCode::from(0))
             } else {
                 // Relay I/O until child exits.
-                let _ = pty.relay_io();
+                if let Ok(stdin_thread) = pty.relay_io() {
+                    let _ = stdin_thread.join();
+                }
 
                 // Wait for child to finish.
                 let status = wait::waitpid(child, None)
