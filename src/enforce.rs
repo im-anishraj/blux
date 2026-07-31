@@ -16,17 +16,9 @@ mod linux {
         let abi = ABI::V4; // V4 supports network
 
         // 1. Map Filesystem Policy
-        let mut fs_read_rights = AccessFs::from_all(abi);
-        fs_read_rights.remove(AccessFs::WriteFile);
-        fs_read_rights.remove(AccessFs::RemoveDir);
-        fs_read_rights.remove(AccessFs::RemoveFile);
-        fs_read_rights.remove(AccessFs::MakeChar);
-        fs_read_rights.remove(AccessFs::MakeDir);
-        fs_read_rights.remove(AccessFs::MakeReg);
-        fs_read_rights.remove(AccessFs::MakeSock);
-        fs_read_rights.remove(AccessFs::MakeFifo);
-        fs_read_rights.remove(AccessFs::MakeBlock);
-        fs_read_rights.remove(AccessFs::MakeSym);
+        let mut fs_read_rights: BitFlags<AccessFs> = BitFlags::EMPTY;
+        fs_read_rights |= AccessFs::ReadFile;
+        fs_read_rights |= AccessFs::ReadDir;
 
         let mut fs_write_rights: BitFlags<AccessFs> = BitFlags::EMPTY;
         fs_write_rights |= AccessFs::WriteFile;
@@ -39,6 +31,10 @@ mod linux {
         fs_write_rights |= AccessFs::MakeFifo;
         fs_write_rights |= AccessFs::MakeBlock;
         fs_write_rights |= AccessFs::MakeSym;
+        // Truncate and Refer might be available depending on ABI, but let's stick to these for safety.
+
+        let mut fs_execute_rights: BitFlags<AccessFs> = BitFlags::EMPTY;
+        fs_execute_rights |= AccessFs::Execute;
 
         let fs_handled = AccessFs::from_all(abi);
 
@@ -83,6 +79,25 @@ mod linux {
                 if p.exists() {
                     ruleset =
                         ruleset.add_rules(landlock::path_beneath_rules([p], fs_write_rights))?;
+                }
+            }
+        }
+
+        // Apply execute rules (combining fs.allow_execute and process.allow_spawn)
+        let mut exec_paths = policy.fs.allow_execute.clone();
+        exec_paths.extend(policy.process.allow_spawn.clone());
+
+        if exec_paths.contains(&"*".to_string()) {
+            ruleset = ruleset.add_rules(landlock::path_beneath_rules(
+                [Path::new("/")],
+                fs_execute_rights,
+            ))?;
+        } else {
+            for path in &exec_paths {
+                let p = Path::new(path);
+                if p.exists() {
+                    ruleset =
+                        ruleset.add_rules(landlock::path_beneath_rules([p], fs_execute_rights))?;
                 }
             }
         }
