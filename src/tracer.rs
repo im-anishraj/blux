@@ -63,7 +63,9 @@ mod linux {
                     if is_entry {
                         match ptrace::getregs(pid) {
                             Ok(regs) => {
-                                handle_syscall_entry(pid, &regs, &sender);
+                                if handle_syscall_entry(pid, &regs, &sender).is_err() {
+                                    break;
+                                }
                             }
                             Err(_) => break,
                         }
@@ -80,10 +82,12 @@ mod linux {
                     {
                         if let Ok(new_pid_raw) = ptrace::getevent(pid) {
                             let new_pid = Pid::from_raw(new_pid_raw as i32);
-                            let _ = sender.send(Event::ProcessSpawn {
+                            if sender.send(Event::ProcessSpawn {
                                 binary: format!("<pid:{}>", new_pid),
                                 args: vec![],
-                            });
+                            }).is_err() {
+                                break;
+                            }
                         }
                     }
                     let _ = ptrace::syscall(pid, None);
@@ -103,28 +107,28 @@ mod linux {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn handle_syscall_entry(pid: Pid, regs: &libc::user_regs_struct, sender: &SyncSender<Event>) {
+    fn handle_syscall_entry(pid: Pid, regs: &libc::user_regs_struct, sender: &SyncSender<Event>) -> Result<(), ()> {
         let sys_no = regs.orig_rax as i64;
 
         match sys_no {
             libc::SYS_openat => {
                 // int dirfd = regs.rdi, const char *pathname = regs.rsi, int flags = regs.rdx
                 if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
-                    let _ = sender.send(Event::FileOpen {
+                    sender.send(Event::FileOpen {
                         path,
-                        mode: "read/write".to_string(),
-                    });
+                        mode: "read/write".to_string(), // Left as read/write since we don't fix openat flags right now as per review finding exclusions
+                    }).map_err(|_| ())?;
                 }
             }
             libc::SYS_unlinkat => {
                 if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
-                    let _ = sender.send(Event::FileDelete { path });
+                    sender.send(Event::FileDelete { path }).map_err(|_| ())?;
                 }
             }
             libc::SYS_connect | libc::SYS_bind => {
                 let ptr = regs.rsi as *mut libc::c_void;
                 if let Some((ip, port)) = read_sockaddr_from_memory(pid, ptr) {
-                    let _ = sender.send(Event::NetConnect { addr: ip, port });
+                    sender.send(Event::NetConnect { addr: ip, port }).map_err(|_| ())?;
                 }
             }
             libc::SYS_execve | libc::SYS_execveat => {
@@ -135,11 +139,12 @@ mod linux {
                     (regs.rdi as i32, regs.rsi)
                 };
                 if let Ok(path) = resolve_at_path(pid, dirfd, ptr as *mut libc::c_void) {
-                    let _ = sender.send(Event::ProcessExec { binary: path });
+                    sender.send(Event::ProcessExec { binary: path }).map_err(|_| ())?;
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     #[cfg(not(target_arch = "x86_64"))]
@@ -147,8 +152,8 @@ mod linux {
         _pid: Pid,
         _regs: &libc::user_regs_struct,
         _sender: &SyncSender<Event>,
-    ) {
-        // Not implemented for non-x86_64 yet
+    ) -> Result<(), ()> {
+        Ok(())
     }
 
     fn read_string_from_memory(pid: Pid, addr: *mut libc::c_void) -> Result<String> {

@@ -37,6 +37,30 @@ pub fn run(cli: &Cli) -> Result<ExitCode> {
     }
 }
 
+fn get_sandbox_config(cli: &Cli, policy: Option<&Policy>) -> Result<Option<enforce::SandboxConfig>> {
+    if cli.enforce {
+        if let Some(p) = policy {
+            return Ok(Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?));
+        }
+    }
+    Ok(None)
+}
+
+fn run_audit_loop(child_pid: Pid, cli: &Cli, policy: &Policy) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1000);
+    let format = cli.format.clone();
+    let verbose = cli.verbose;
+    let policy_clone = policy.clone();
+
+    let report_thread = std::thread::spawn(move || {
+        report::print_report(rx, format, policy_clone, verbose);
+    });
+
+    tracer::trace_loop(child_pid, tx)?;
+    let _ = report_thread.join();
+    Ok(())
+}
+
 /// Pipe mode: spawn the child with inherited stdio. Used when stdin is not a TTY
 /// (e.g., piped input, CI environments).
 fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
@@ -55,15 +79,7 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     let enforce = cli.enforce;
     let policy_for_child = policy.clone();
 
-    let sandbox_config = if enforce {
-        if let Some(ref p) = policy_for_child {
-            Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let sandbox_config = get_sandbox_config(cli, policy.as_ref())?;
 
     unsafe {
         cmd.pre_exec(move || {
@@ -98,18 +114,7 @@ fn run_pipe(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
     signal::set_child_pid(child_pid);
 
     if audit {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1000);
-        let format = cli.format.clone();
-        let policy = policy.unwrap();
-        let verbose = cli.verbose;
-
-        let report_thread = std::thread::spawn(move || {
-            report::print_report(rx, format, policy, verbose);
-        });
-
-        tracer::trace_loop(child_pid, tx)?;
-        let _ = report_thread.join();
-
+        run_audit_loop(child_pid, cli, &policy.unwrap())?;
         // Return 0 because waitpid is consumed by trace_loop
         Ok(ExitCode::from(0))
     } else {
@@ -130,15 +135,7 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
 
     signal::install_forwarding_handlers()?;
 
-    let sandbox_config = if cli.enforce {
-        if let Some(ref p) = policy {
-            Some(enforce::prepare_sandbox(p).context("failed to prepare sandbox")?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let sandbox_config = get_sandbox_config(cli, policy.as_ref())?;
 
     // Fork the process.
     // SAFETY: We are single-threaded at this point (before any thread spawning),
@@ -181,16 +178,9 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
             pty.set_raw_mode()?;
 
             let audit = cli.audit;
-            let format = cli.format.clone();
-            let verbose = cli.verbose;
 
             if audit {
-                let (tx, rx) = std::sync::mpsc::sync_channel(1000);
-                let policy = policy.unwrap();
-
-                let report_thread = std::thread::spawn(move || {
-                    report::print_report(rx, format, policy, verbose);
-                });
+                let policy_for_audit = policy.unwrap();
 
                 // CRITICAL FIX: The thread that calls fork() MUST be the one handling ptrace.
                 // We offload the PTY I/O relay loop to a secondary thread so the main thread
@@ -200,9 +190,8 @@ fn run_pty(cli: &Cli, policy: Option<Policy>) -> Result<ExitCode> {
                 });
 
                 // Main thread acts as the tracer
-                let trace_res = tracer::trace_loop(child, tx);
+                let trace_res = run_audit_loop(child, cli, &policy_for_audit);
                 
-                let _ = report_thread.join();
                 let relay_res = relay_thread.join().unwrap(); // safe, thread doesn't panic
                 
                 if let Ok(stdin_thread) = relay_res {
