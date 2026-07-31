@@ -22,6 +22,8 @@ pub struct FsPolicy {
     pub allow_read: Vec<String>,
     #[serde(default)]
     pub allow_write: Vec<String>,
+    #[serde(default)]
+    pub allow_execute: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
