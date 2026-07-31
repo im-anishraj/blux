@@ -80,10 +80,13 @@ mod linux {
                     {
                         if let Ok(new_pid_raw) = ptrace::getevent(pid) {
                             let new_pid = Pid::from_raw(new_pid_raw as i32);
-                            if sender.send(Event::ProcessSpawn {
-                                binary: format!("<pid:{}>", new_pid),
-                                args: vec![],
-                            }).is_err() {
+                            if sender
+                                .send(Event::ProcessSpawn {
+                                    binary: format!("<pid:{}>", new_pid),
+                                    args: vec![],
+                                })
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -105,28 +108,40 @@ mod linux {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn handle_syscall_entry(pid: Pid, regs: &libc::user_regs_struct, sender: &SyncSender<Event>) -> Result<(), ()> {
+    fn handle_syscall_entry(
+        pid: Pid,
+        regs: &libc::user_regs_struct,
+        sender: &SyncSender<Event>,
+    ) -> Result<(), ()> {
         let sys_no = regs.orig_rax as i64;
 
         match sys_no {
             libc::SYS_openat => {
                 // int dirfd = regs.rdi, const char *pathname = regs.rsi, int flags = regs.rdx
-                if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
-                    sender.send(Event::FileOpen {
-                        path,
-                        mode: "read/write".to_string(), // Left as read/write since we don't fix openat flags right now as per review finding exclusions
-                    }).map_err(|_| ())?;
+                if let Ok(path) =
+                    resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void)
+                {
+                    sender
+                        .send(Event::FileOpen {
+                            path,
+                            mode: "read/write".to_string(), // Left as read/write since we don't fix openat flags right now as per review finding exclusions
+                        })
+                        .map_err(|_| ())?;
                 }
             }
             libc::SYS_unlinkat => {
-                if let Ok(path) = resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void) {
+                if let Ok(path) =
+                    resolve_at_path(pid, regs.rdi as i32, regs.rsi as *mut libc::c_void)
+                {
                     sender.send(Event::FileDelete { path }).map_err(|_| ())?;
                 }
             }
             libc::SYS_connect | libc::SYS_bind => {
                 let ptr = regs.rsi as *mut libc::c_void;
                 if let Some((ip, port)) = read_sockaddr_from_memory(pid, ptr) {
-                    sender.send(Event::NetConnect { addr: ip, port }).map_err(|_| ())?;
+                    sender
+                        .send(Event::NetConnect { addr: ip, port })
+                        .map_err(|_| ())?;
                 }
             }
             libc::SYS_execve | libc::SYS_execveat => {
@@ -137,7 +152,9 @@ mod linux {
                     (regs.rdi as i32, regs.rsi)
                 };
                 if let Ok(path) = resolve_at_path(pid, dirfd, ptr as *mut libc::c_void) {
-                    sender.send(Event::ProcessExec { binary: path }).map_err(|_| ())?;
+                    sender
+                        .send(Event::ProcessExec { binary: path })
+                        .map_err(|_| ())?;
                 }
             }
             _ => {}
@@ -155,7 +172,7 @@ mod linux {
     }
 
     fn read_string_from_memory(pid: Pid, addr: *mut libc::c_void) -> Result<String> {
-        use nix::sys::uio::{process_vm_readv, RemoteIoVec};
+        use nix::sys::uio::{RemoteIoVec, process_vm_readv};
         use std::io::IoSliceMut;
 
         let mut buf = vec![0u8; 4096];
@@ -163,12 +180,15 @@ mod linux {
             base: addr as usize,
             len: 4096,
         };
-        
+
         let mut local_iov = [IoSliceMut::new(&mut buf)];
         let read_bytes = process_vm_readv(pid, &mut local_iov, &[remote_iov])
             .context("process_vm_readv failed")?;
-        
-        let end = buf[..read_bytes].iter().position(|&b| b == 0).unwrap_or(read_bytes);
+
+        let end = buf[..read_bytes]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(read_bytes);
         String::from_utf8(buf[..end].to_vec()).context("invalid utf8")
     }
 
@@ -207,11 +227,11 @@ mod linux {
         } else if family == libc::AF_INET6 as u16 {
             let port = u16::from_be_bytes([bytes[2], bytes[3]]);
             let word3 = ptrace::read(pid, (addr as usize + 16) as *mut libc::c_void).ok()?;
-            
+
             let mut ipv6_bytes = [0u8; 16];
             ipv6_bytes[0..8].copy_from_slice(&word2.to_ne_bytes());
             ipv6_bytes[8..16].copy_from_slice(&word3.to_ne_bytes());
-            
+
             let ip = std::net::Ipv6Addr::from(ipv6_bytes);
             return Some((ip.to_string(), port));
         }

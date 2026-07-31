@@ -2,8 +2,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use anyhow::{Context, Result};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::libc;
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::pty::{self, OpenptyResult};
 use nix::sys::termios::{self, SetArg, Termios};
 use nix::unistd;
@@ -93,19 +93,22 @@ impl PtyPair {
 
         // Thread 1: stdin -> PTY master
         let stdin_thread = std::thread::spawn(move || {
-            use nix::poll::{poll, PollFd, PollFlags};
+            use nix::poll::{PollFd, PollFlags, poll};
+            let stdin_borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(stdin_fd) };
+            let master_borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(master_fd) };
             let mut buf = [0u8; 4096];
-            let mut fds = [PollFd::new(stdin_fd, PollFlags::POLLIN)];
+            let mut fds = [PollFd::new(&stdin_borrowed, PollFlags::POLLIN)];
 
             while running_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 match poll(&mut fds, 100) {
                     Ok(n) if n > 0 => {
-                        match nix::unistd::read(stdin_fd, &mut buf) {
+                        match nix::unistd::read(&stdin_borrowed, &mut buf) {
                             Ok(0) => break, // EOF
                             Ok(bytes) => {
                                 let mut written = 0;
                                 while written < bytes {
-                                    match nix::unistd::write(master_fd, &buf[written..bytes]) {
+                                    match nix::unistd::write(&master_borrowed, &buf[written..bytes])
+                                    {
                                         Ok(0) => break,
                                         Ok(w) => written += w,
                                         Err(nix::errno::Errno::EINTR) => continue,
@@ -126,8 +129,9 @@ impl PtyPair {
 
         // Thread 2 (Current Thread): PTY master -> stdout
         let mut buf = [0u8; 4096];
+        let master_borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(master_fd) };
         loop {
-            match nix::unistd::read(master_fd, &mut buf) {
+            match nix::unistd::read(&master_borrowed, &mut buf) {
                 Ok(0) => {
                     // EOF — child has exited and closed its end of the PTY
                     break;
